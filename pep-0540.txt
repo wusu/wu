@@ -1,0 +1,261 @@
+PEP: 540
+Title: Add a new UTF-8 mode
+Version: $Revision$
+Last-Modified: $Date$
+Author: Victor Stinner <victor.stinner@gmail.com>
+BDFL-Delegate: INADA Naoki
+Status: Draft
+Type: Standards Track
+Content-Type: text/x-rst
+Created: 5-January-2016
+Python-Version: 3.7
+
+
+Abstract
+========
+
+Add a new UTF-8 mode to ignore the locale and use the UTF-8 encoding
+with the ``surrogateescape`` error handler. This mode is enabled by
+default in the POSIX locale, but otherwise disabled by default.
+
+Add also a "strict" UTF-8 mode which uses the ``strict`` error handler,
+instead of ``surrogateescape``, with the UTF-8 encoding.
+
+The new ``-X utf8`` command line option and ``PYTHONUTF8`` environment
+variable are added to control the UTF-8 mode.
+
+
+Rationale
+=========
+
+Locale encoding and UTF-8
+-------------------------
+
+Python 3.6 uses the locale encoding for filenames, environment
+variables, standard streams, etc. The locale encoding is inherited from
+the locale; the encoding and the locale are tightly coupled.
+
+Many users inherit the ASCII encoding from the POSIX locale, aka the "C"
+locale, but are unable change the locale for different reasons. This
+encoding is very limited in term of Unicode support: any non-ASCII
+character is likely to cause troubles.
+
+It is not easy to get the expected locale. Locales don't get the exact
+same name on all Linux distributions, FreeBSD, macOS, etc. Some
+locales, like the recent ``C.UTF-8`` locale, are only supported by a few
+platforms. For example, a SSH connection can use a different encoding
+than the filesystem or terminal encoding of the local host.
+
+On the other side, Python 3.6 is already using UTF-8 by default on
+macOS, Android and Windows (PEP 529) for most functions, except of
+``open()``. UTF-8 is also the default encoding of Python scripts, XML
+and JSON file formats. The Go programming language uses UTF-8 for
+strings.
+
+When all data are stored as UTF-8 but the locale is often misconfigured,
+an obvious solution is to ignore the locale and use UTF-8.
+
+Passthough undecodable bytes: surrogateescape
+---------------------------------------------
+
+Using UTF-8 is nice, until you read the first file encoded to a
+different encoding. When using the ``strict`` error handler, which is
+the default, Python 3 raises a ``UnicodeDecodeError`` on the first
+undecodable byte.
+
+Unix command line tools like ``cat`` or ``grep`` and most Python 2
+applications simply do not have this class of bugs: they don't decode
+data, but process data as a raw bytes sequence.
+
+Python 3 already has a solution to behave like Unix tools and Python 2:
+the ``surrogateescape`` error handler (:pep:`383`). It allows to process
+data "as bytes" but uses Unicode in practice (undecodable bytes are
+stored as surrogate characters).
+
+For an application written as a Unix "pipe" tool like ``grep``, taking
+input on stdin and writing output to stdout, ``surrogateescape`` allows
+to "passthrough" undecodable bytes.
+
+The UTF-8 encoding used with the ``surrogateescape`` error handler is a
+compromise between correctness and usability.
+
+Strict UTF-8 for correctness
+----------------------------
+
+When correctness matters more than usability, the ``strict`` error
+handler is preferred over ``surrogateescape`` to raise an encoding error
+at the first undecodable byte or unencodable character.
+
+No change by default for best backward compatibility
+----------------------------------------------------
+
+While UTF-8 is perfect in most cases, sometimes the locale encoding is
+actually the best encoding.
+
+This PEP changes the behaviour for the POSIX locale since this locale
+usually gives the ASCII encoding, whereas UTF-8 is a much better choice.
+It does not change the behaviour for other locales to prevent any risk
+or regression.
+
+As users are responsible to enable explicitly the new UTF-8 mode, they
+are responsible for any potential mojibake issues caused by this mode.
+
+
+Proposal
+========
+
+Add a new UTF-8 mode to ignore the locale and use the UTF-8 encoding
+with the ``surrogateescape`` error handler. This mode is enabled by
+default in the POSIX locale, but otherwise disabled by default.
+
+Add also a "strict" UTF-8 mode which uses the ``strict`` error handler,
+instead of ``surrogateescape``, with the UTF-8 encoding.
+
+The new ``-X utf8`` command line option and ``PYTHONUTF8`` environment
+variable are added to control the UTF-8 mode:
+
+* The UTF-8 mode is enabled by ``-X utf8`` or ``PYTHONUTF8=1``
+* The Strict UTF-8 mode is configured by ``-X utf8=strict`` or
+  ``PYTHONUTF8=strict``
+
+The POSIX locale enables the UTF-8 mode. In this case, the UTF-8 mode
+can be explicitly disabled by ``-X utf8=0`` or ``PYTHONUTF8=0``.
+
+For standard streams, the ``PYTHONIOENCODING`` environment variable has
+priority over the UTF-8 mode.
+
+On Windows, the ``PYTHONLEGACYWINDOWSFSENCODING`` environment variable
+(:pep:`529`) has the priority over the UTF-8 mode.
+
+
+Backward Compatibility
+======================
+
+The only backward incompatible change is that the UTF-8 encoding is now
+used for the POSIX locale.
+
+
+Annex: Encodings And Error Handlers
+===================================
+
+The UTF-8 mode changes the default encoding and error handler used by
+``open()``, ``os.fsdecode()``, ``os.fsencode()``, ``sys.stdin``,
+``sys.stdout`` and ``sys.stderr``.
+
+Encoding and error handler
+--------------------------
+
+============================  =======================  ==========================  ==========================
+Function                      Default                  UTF-8 mode or POSIX locale  Strict UTF-8 mode
+============================  =======================  ==========================  ==========================
+open()                        locale/strict            **UTF-8/surrogateescape**   **UTF-8**/strict
+os.fsdecode(), os.fsencode()  locale/surrogateescape   **UTF-8**/surrogateescape   **UTF-8**/surrogateescape
+sys.stdin, sys.stdout         locale/strict            **UTF-8/surrogateescape**   **UTF-8**/strict
+sys.stderr                    locale/backslashreplace  **UTF-8**/backslashreplace  **UTF-8**/backslashreplace
+============================  =======================  ==========================  ==========================
+
+By comparison, Python 3.6 uses:
+
+============================  =======================  ==========================
+Function                      Default                  POSIX locale
+============================  =======================  ==========================
+open()                        locale/strict            locale/strict
+os.fsdecode(), os.fsencode()  locale/surrogateescape   locale/surrogateescape
+sys.stdin, sys.stdout         locale/strict            locale/**surrogateescape**
+sys.stderr                    locale/backslashreplace  locale/backslashreplace
+============================  =======================  ==========================
+
+Encoding and error handler on Windows
+-------------------------------------
+
+On Windows, the encodings and error handlers are different:
+
+============================  =======================  ==========================  ==========================  ==========================
+Function                      Default                  Legacy Windows FS encoding  UTF-8 mode                  Strict UTF-8 mode
+============================  =======================  ==========================  ==========================  ==========================
+open()                        mbcs/strict              mbcs/strict                 **UTF-8/surrogateescape**   **UTF-8**/strict
+os.fsdecode(), os.fsencode()  UTF-8/surrogatepass      **mbcs/replace**            UTF-8/surrogatepass         UTF-8/surrogatepass
+sys.stdin, sys.stdout         UTF-8/surrogateescape    UTF-8/surrogateescape       UTF-8/surrogateescape       **UTF-8/strict**
+sys.stderr                    UTF-8/backslashreplace   UTF-8/backslashreplace      UTF-8/backslashreplace      UTF-8/backslashreplace
+============================  =======================  ==========================  ==========================  ==========================
+
+By comparison, Python 3.6 uses:
+
+============================  =======================  ==========================
+Function                      Default                  Legacy Windows FS encoding
+============================  =======================  ==========================
+open()                        mbcs/strict              mbcs/strict
+os.fsdecode(), os.fsencode()  UTF-8/surrogatepass      **mbcs/replace**
+sys.stdin, sys.stdout         UTF-8/surrogateescape    UTF-8/surrogateescape
+sys.stderr                    UTF-8/backslashreplace   UTF-8/backslashreplace
+============================  =======================  ==========================
+
+The "Legacy Windows FS encoding" is enabled by the
+``PYTHONLEGACYWINDOWSFSENCODING`` environment variable.
+
+If stdin and/or stdout is redirected to a pipe, ``sys.stdin`` and/or
+``sys.output`` use ``mbcs`` encoding by default rather than UTF-8. But
+in the UTF-8 mode, ``sys.stdin`` and ``sys.stdout`` always use the UTF-8
+encoding.
+
+.. note:
+   There is no POSIX locale on Windows. The ANSI code page is used to the
+   locale encoding, and this code page never uses the ASCII encoding.
+
+
+Annex: Differences between the PEP 538 and the PEP 540
+======================================================
+
+The PEP 538 uses the "C.UTF-8" locale which is quite new and only
+supported by a few Linux distributions; this locale is not currently
+supported by FreeBSD or macOS for example. This PEP 540 supports all
+operating systems.
+
+The PEP 538 only changes the behaviour for the POSIX locale. While the
+new UTF-8 mode of this PEP is only enabled by the POSIX locale, it can
+be enabled manually for any other locale.
+
+The PEP 538 is implemented with ``setlocale(LC_CTYPE, "C.UTF-8")``: any
+non-Python code running in the process is impacted by this change.  This
+PEP is implemented in Python internals and ignores the locale:
+non-Python running in the same process is not aware of the "Python UTF-8
+mode".
+
+
+Links
+=====
+
+* `bpo-29240: Implementation of the PEP 540: Add a new UTF-8 mode
+  <http://bugs.python.org/issue29240>`_
+* `PEP 538 <https://www.python.org/dev/peps/pep-0538/>`_:
+  "Coercing the legacy C locale to C.UTF-8"
+* `PEP 529 <https://www.python.org/dev/peps/pep-0529/>`_:
+  "Change Windows filesystem encoding to UTF-8"
+* `PEP 528 <https://www.python.org/dev/peps/pep-0528/>`_:
+  "Change Windows console encoding to UTF-8"
+* `PEP 383 <https://www.python.org/dev/peps/pep-0383/>`_:
+  "Non-decodable Bytes in System Character Interfaces"
+
+
+Post History
+============
+
+* 2017-12: `[Python-Dev] PEP 540: Add a new UTF-8 mode
+  <https://mail.python.org/pipermail/python-dev/2017-December/151054.html>`_
+* 2017-04: `[Python-Dev] Proposed BDFL Delegate update for PEPs 538 &
+  540 (assuming UTF-8 for *nix system boundaries)
+  <https://mail.python.org/pipermail/python-dev/2017-April/147795.html>`_
+* 2017-01: `[Python-ideas] PEP 540: Add a new UTF-8 mode
+  <https://mail.python.org/pipermail/python-ideas/2017-January/044089.html>`_
+* 2017-01: `bpo-28180: Implementation of the PEP 538: coerce C locale to
+  C.utf-8 (msg284764) <https://bugs.python.org/issue28180#msg284764>`_
+* 2016-08-17: `bpo-27781: Change sys.getfilesystemencoding() on Windows
+  to UTF-8 (msg272916) <https://bugs.python.org/issue27781#msg272916>`_
+  -- Victor proposed ``-X utf8`` for the :pep:`529` (Change Windows
+  filesystem encoding to UTF-8)
+
+
+Copyright
+=========
+
+This document has been placed in the public domain.
